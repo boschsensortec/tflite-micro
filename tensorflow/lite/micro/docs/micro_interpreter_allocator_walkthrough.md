@@ -52,7 +52,9 @@ metadata, runtime tensor views, and a static head-memory plan. Kernels do not
 implement the global planner: they use context services in `init` and `prepare`,
 then consume evaluation tensors and any scratch pointers in `invoke`.
 
-### What is stored where
+## Vocabulary and ownership
+
+### Storage model
 
 The model is a FlatBuffer byte image supplied by the caller. `GetModel(bytes)`
 returns a typed view over those existing bytes: it is not a deep copy, and the
@@ -722,7 +724,7 @@ used first for scratch-request metadata, then repurposed for planned overlay
 payloads. Thus the same low-address bytes have different setup and invoke-time
 roles.
 
-```text
+```text name=arena-memory-layout
 Before setup (illustrative; addresses increase left-to-right)
 low address                                                            high address
 | head/overlay (empty) | free space                                 | persistent tail |
@@ -779,7 +781,7 @@ bool allocate_up(uintptr_t begin, uintptr_t end, size_t bytes,
 bool allocate_down(uintptr_t begin, uintptr_t current_tail, size_t bytes,
                    size_t alignment, uintptr_t* next_tail, void** result) {
   if (alignment == 0 || (alignment & (alignment - 1)) != 0) return false;
-  if (bytes > current_tail - begin) return false;
+  if (current_tail < begin || bytes > current_tail - begin) return false;
   uintptr_t candidate = current_tail - bytes;
   uintptr_t aligned = candidate & ~(alignment - 1);
   if (aligned < begin) return false;
