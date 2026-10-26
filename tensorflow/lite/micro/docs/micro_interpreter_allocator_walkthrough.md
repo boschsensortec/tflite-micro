@@ -139,6 +139,44 @@ tensor offset, arena peak, or timing is asserted here.
 The main float flow below is annotated in separate sections rather than hiding
 all allocation details in one very large diagram:
 
+```mermaid name=hello-world-call-path
+sequenceDiagram
+  participant Main as hello_world main
+  participant Profile as ProfileMemoryAndLatency
+  participant Recording as RecordingMicroInterpreter
+  participant Float as LoadFloatModelAndPerformInference
+  participant Quant as LoadQuantModelAndPerformInference
+  participant Model as GetModel FlatBuffer view
+  Main->>Profile: call first
+  Profile->>Profile: create MicroProfiler and resolver capacity 1
+  Profile->>Recording: create with 3000 byte arena
+  Note over Profile,Recording: RecordingMicroAllocator plus 24 MicroResourceVariables
+  Recording->>Recording: AllocateTensors, write float input, Invoke
+  Recording->>Profile: log profiler tags and recorded allocations
+  Main->>Float: call second
+  Float->>Model: GetModel(float model bytes)
+  Float->>Float: version check, register Fully Connected
+  Float->>Float: create ordinary interpreter with 3000 byte arena
+  Float->>Float: AllocateTensors
+  loop four test inputs from the source
+    Float->>Float: write float input, Invoke, read float output
+  end
+  Main->>Quant: call third
+  Quant->>Model: GetModel(int8 model bytes)
+  Quant->>Quant: version check, register Fully Connected
+  Quant->>Quant: create ordinary interpreter with 3000 byte arena
+  Quant->>Quant: AllocateTensors
+  loop four quantized test inputs from the source
+    Quant->>Quant: write int8 input, Invoke, dequantize output
+  end
+```
+
+The 3000-byte arenas in this diagram belong to the separate test invocations;
+they are example choices, not a shared arena or a universal requirement. The
+recording branch's 24 resource-variable slots and profiler are not present in
+the ordinary float/quantized branches. `GetModel()` maps each byte array to a
+view, and each inference function checks the schema version before allocating.
+
 1. [Construction](#construction): caller storage to self-hosted allocator and
    phase-aware context.
 2. [Allocation front half](#allocatetensors-the-complete-orchestration):
@@ -611,7 +649,8 @@ storage to each local tensor index. `needs_allocating` is normally true for a
 nonzero-byte tensor whose eval data pointer is null and which is not a variable.
 Constants have non-null FlatBuffer pointers and are skipped. Online variables
 are allocated in persistent tail before planning; offline-planned variables can
-be planned at their given offset.
+be planned at their given offset. Zero-byte records are not allocated as
+activation buffers, even when their runtime data pointer is null.
 
 The lifetime walker uses a monotonically increasing `allocation_scope_count_`:
 
